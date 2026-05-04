@@ -13,23 +13,34 @@ Two build conditions are compared head-to-head:
 | `main_ogre19` | `main` | 1.9.1 (built from source) |
 | `ogre112` | `jrivero/ogre112` | 1.12 (system package) |
 
-Each condition runs the **`3k_shapes_camera`** world: ~3000 geometry shapes
-(the standard `gz-sim` shapes-population world) plus a static 1280×720 @ 30 Hz
-camera sensor pointed at the scene.  The simulation runs in headless/server-only
-mode with offscreen rendering (`--headless-rendering`).
+Each condition runs a **shapes-population** world (the standard `gz-sim`
+shapes world, sized to ~100 / ~500 / ~3000 models) instrumented with one of
+two sensors:
+
+- a static **1280×720 @ 30 Hz camera** pointed at the scene, _or_
+- a **Velodyne-class `gpu_lidar`** (360° horizontal × 16 vertical channels
+  @ 30 Hz, 0.1-100 m range) mounted inside the scene.
+
+The simulation runs in headless/server-only mode with offscreen rendering
+(`--headless-rendering`).  The active sensor is selected with
+`run_bench.sh --sensor camera|lidar`.
 
 ### Metrics collected per run (80 s window, 10 s warmup discarded)
 
 | Metric | Source |
 |---|---|
 | RTF — Real-Time Factor (p50, p10) | `gz topic` world stats |
-| Camera publish rate (mean Hz) | `gz topic --frequency` on `/bench/camera/image` |
+| Sensor publish rate (mean Hz)¹ | `gz topic --frequency` on `/bench/camera/image` or `/bench/lidar/scan` |
 | CPU % of the gz-sim server process | `/proc/<pid>/stat` sampled at 1 Hz |
 | RSS peak (MB) | same source |
 | GPU utilisation % (p50) | `nvidia-smi` at 1 Hz |
 | VRAM peak (MB) | `nvidia-smi` |
 | GPU power draw (p50, W) | `nvidia-smi` |
 | Disk write throughput (p50, MB/s) | `iostat` |
+
+¹ The aggregator labels this row "Camera Hz (mean)" in `report.md` for
+historical reasons; on `--sensor lidar` runs it is the lidar scan publish
+rate.
 
 ### Runs
 
@@ -127,8 +138,64 @@ are within noise, but at mid scales (~500 shapes) ogre 1.12 is ~28 % slower on
 both RTF and camera publish rate.  The regression is consistent with extra
 per-renderable-per-frame work in the OGRE 1.12 render path.
 
+## Results — `gpu_lidar` sensor (small scene)
+
+Same shapes-population world (~100 models / 104 model blocks) but with the
+camera replaced by a **Velodyne-class `gpu_lidar`** (360° × 16 channels,
+30 Hz, range 0.1-100 m, topic `/bench/lidar/scan`).  The lidar rig is
+mounted at `z = 2 m` inside the scene rather than looking down from above,
+so its rays sweep through the populated volume.
+
+| World file | Models | Result dir |
+|---|---|---|
+| `33_shapes_lidar.sdf` | ~100 (104) | [`results/2026-05-04-1922/`](results/2026-05-04-1922/) |
+
+### Headline numbers — lidar @ ~100 shapes ([`report.md`](results/2026-05-04-1922/report.md))
+
+| Metric | main_ogre19 | ogre112 | Δ |
+|---|---|---|---|
+| RTF p50 | 0.5611 | 0.5569 | −0.7 % |
+| RTF p10 (tail) | 0.5476 | 0.5375 | −1.8 % |
+| Lidar scan Hz | 16.94 | 16.72 | −1.3 % |
+| CPU % | 109 | 109 | ≈0 % |
+| RSS peak (MB) | 818 | 803 | −1.8 % * |
+| GPU util % | 12.0 | 34.0 | **+183 %** * |
+| VRAM peak (MB) | 3142 | 2758 | **−12.2 %** * |
+| GPU power (W) | 29.5 | 30.5 | +3.4 % |
+
+`*` = IQRs do not overlap (informally significant).  The "Lidar scan Hz"
+row is the `cam_hz_mean` column in `report.md` (sampler is sensor-agnostic;
+the label is historical).
+
+### Observations
+
+- **Throughput is unchanged** — RTF and lidar scan Hz both within IQR
+  overlap.  The 30 Hz target is RTF-capped at ~17 Hz on this hardware
+  because the simulation runs at ~0.56 RTF.
+- **VRAM**: ogre 1.12 saves ~12 %, consistent with the camera bench at the
+  same scene size.
+- **GPU util triples (12 % → 34 %, IQRs disjoint) for the same scan
+  throughput** — ogre 1.12 spends nearly 3× more GPU time per published
+  scan.  At this scene size there is plenty of GPU headroom so it does
+  not show up in the publish rate, but it is a clear efficiency
+  regression in the `gpu_lidar` render path.  Power draw bumps modestly
+  (+3.4 %) consistent with the higher utilisation.
+- **CPU and RSS** are essentially flat (CPU 109 % both; RSS −1.8 %).
+
+### Caveat / next step
+
+This is a **single-scale** lidar benchmark.  The camera bench showed the
+OGRE 1.9 → 1.12 cost is scale-dependent (small ≈ noise, mid ≈ −28 %, very
+large ≈ noise).  The same sweep at ~500 shapes would tell us whether the
+~3× GPU-util headroom on lidar collapses into a throughput regression once
+the GPU starts saturating — that is the most likely place a real-world
+lidar workload would feel the migration.
+
+## Reusing the harness
+
 The benchmark harness is reusable for any other scene — pass `--world <name>`
-and put a matching SDF in `bench/worlds/`.
+and put a matching SDF in `bench/worlds/`.  Use `--sensor camera` (default)
+or `--sensor lidar` to switch sensor type.
 
 ## Repository layout
 
@@ -138,14 +205,15 @@ bench/
 ├── lib/
 │   ├── build_ogre_19.sh  # build OGRE 1.9.1 into a local prefix
 │   ├── build_condition.sh# build one (branch, ogre) pair with colcon
-│   ├── build_world.sh    # inject sensors plugin + camera into the SDF world
+│   ├── build_world.sh    # inject sensors plugin + camera or gpu_lidar into the SDF world
 │   ├── run_condition.sh  # run N samples for one condition
 │   ├── collect_samples.sh# single 90 s sample (warmup + measure + samplers)
 │   └── aggregate.py      # summarise per-run CSVs → summary.csv + report.md
 ├── worlds/
-│   ├── 33_shapes_camera.sdf   # ~100 shapes  (small)
-│   ├── 166_shapes_camera.sdf  # ~500 shapes  (mid)
-│   └── 3k_shapes_camera.sdf   # ~3000 shapes (stress)
+│   ├── 33_shapes_camera.sdf   # ~100 shapes  (small) + camera
+│   ├── 166_shapes_camera.sdf  # ~500 shapes  (mid)   + camera
+│   ├── 3k_shapes_camera.sdf   # ~3000 shapes (stress)+ camera
+│   └── 33_shapes_lidar.sdf    # ~100 shapes  (small) + gpu_lidar
 └── results/
     └── YYYY-MM-DD-HHMM/
         ├── <condition>/run_NN/{rtf,cpu,gpu,io,cam_hz}.csv
@@ -176,6 +244,9 @@ bench/
 
 # Use a different world:
 ./run_bench.sh --world 166_shapes_camera
+
+# Switch sensor (camera default; lidar is gpu_lidar on /bench/lidar/scan):
+./run_bench.sh --sensor lidar --world 33_shapes_lidar
 
 # Override GPU-busy / high-load checks:
 ./run_bench.sh --force

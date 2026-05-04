@@ -23,6 +23,7 @@ SKIP_BUILD=0
 SKIP_BENCH=0
 FORCE=0
 WORLD_NAME="3k_shapes_camera"
+SENSOR_TYPE="camera"
 
 while (( $# > 0 )); do
   case "$1" in
@@ -31,6 +32,7 @@ while (( $# > 0 )); do
     --n-runs)     N_RUNS="$2"; shift 2 ;;
     --force)      FORCE=1; shift ;;
     --world)      WORLD_NAME="$2"; shift 2 ;;
+    --sensor)     SENSOR_TYPE="$2"; shift 2 ;;
     -h|--help)
       grep '^#' "$0" | sed 's/^#//'
       exit 0
@@ -38,6 +40,13 @@ while (( $# > 0 )); do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+case "$SENSOR_TYPE" in
+  camera) export BENCH_SENSOR_TOPIC="/bench/camera/image" ;;
+  lidar)  export BENCH_SENSOR_TOPIC="/bench/lidar/scan" ;;
+  *) echo "[run_bench] --sensor must be camera|lidar" >&2; exit 2 ;;
+esac
+echo "[run_bench] sensor=$SENSOR_TYPE  topic=$BENCH_SENSOR_TOPIC"
 
 WORLD="$PROJECT_ROOT/bench/worlds/${WORLD_NAME}.sdf"
 
@@ -79,8 +88,15 @@ if (( ! SKIP_BUILD )); then
 fi
 
 # --- Stage 2: world generation (always regenerate) ---
-echo "[run_bench] generating world"
-"$LIB/build_world.sh"
+# Re-derive N_SHAPES and OUT_NAME from WORLD_NAME so build_world.sh produces
+# the world the runner expects. Pattern: <NN>_shapes_<sensor> or 3k_shapes_<sensor>.
+echo "[run_bench] generating world ($WORLD_NAME)"
+WORLD_N_SHAPES=0
+if [[ "$WORLD_NAME" =~ ^([0-9]+)_shapes_(camera|lidar)$ ]]; then
+  WORLD_N_SHAPES="${BASH_REMATCH[1]}"
+fi
+SENSOR_TYPE="$SENSOR_TYPE" N_SHAPES="$WORLD_N_SHAPES" OUT_NAME="$WORLD_NAME" \
+  "$LIB/build_world.sh"
 
 # --- Stage 3: condition builds ---
 if (( ! SKIP_BUILD )); then

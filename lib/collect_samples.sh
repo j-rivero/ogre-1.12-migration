@@ -18,7 +18,9 @@ WARMUP_S=10
 MEASURE_S=80
 TOTAL_S=$((WARMUP_S + MEASURE_S))
 WORLD_NAME=shapes
-CAMERA_TOPIC="/bench/camera/image"
+# BENCH_SENSOR_TOPIC overrides the topic whose Hz is sampled into cam_hz.csv.
+# Default is the camera bench topic; lidar runs set it to /bench/lidar/scan.
+CAMERA_TOPIC="${BENCH_SENSOR_TOPIC:-/bench/camera/image}"
 
 mkdir -p "$RUN_DIR"
 

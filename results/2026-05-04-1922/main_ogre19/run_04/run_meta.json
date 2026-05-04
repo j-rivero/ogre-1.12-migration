@@ -1,0 +1,12 @@
+{
+  "install_dir": "/home/jrivero/code/my-agents.md/projects/ogre-migrator/ws/build-1.9/install",
+  "world_path": "/home/jrivero/code/my-agents.md/projects/ogre-migrator/bench/worlds/33_shapes_lidar.sdf",
+  "linked_ogre": "libOgreMain.so.1.9.0",
+  "warmup_s": 10,
+  "measure_s": 80,
+  "t_start": 1777915873,
+  "t_ready": 1777915881,
+  "t_measure_start": 1777915891,
+  "t_end": 1777916051,
+  "gzsim_died_at": ""
+}
