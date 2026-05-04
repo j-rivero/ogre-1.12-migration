@@ -39,9 +39,39 @@ across the 5 runs.
 
 ## Results
 
-The latest complete benchmark run is in [`results/2026-05-04-1700/`](results/2026-05-04-1700/).
-See [`results/2026-05-04-1700/report.md`](results/2026-05-04-1700/report.md) for the
-full table.  Headline numbers:
+The benchmark was run at three scene scales to expose how the OGRE 1.9 → 1.12
+cost scales with renderable count.  All three result directories are preserved:
+
+| Run dir | World file | Models in scene |
+|---|---|---|
+| [`results/2026-05-04-1700/`](results/2026-05-04-1700/) | `33_shapes_camera.sdf`  | ~100 (104) |
+| [`results/2026-05-04-1559/`](results/2026-05-04-1559/) | `166_shapes_camera.sdf` | ~500 (503) |
+| [`results/2026-05-04-1521/`](results/2026-05-04-1521/) | `3k_shapes_camera.sdf`  | ~3000 (3005) |
+
+### Scaling picture (RTF and camera throughput)
+
+| Scene | RTF main | RTF ogre112 | Δ RTF | Cam Hz Δ | Notes |
+|---|---|---|---|---|---|
+| ~100 shapes  | 0.521  | 0.526  | +0.8 % (noise) | 0 %      | both have GPU headroom (~39 % util) |
+| ~500 shapes  | 0.102  | 0.073  | **−28 %** *    | **−26 %** * | clear regression |
+| ~3000 shapes | 0.0115 | 0.0115 | +0.5 % (noise) | 0 %      | both saturated at floor |
+
+`*` = IQRs do not overlap (informally significant).
+
+**The migration regression is scale-dependent, not constant**:
+
+- **Small scenes (~100 shapes)** — equal performance, both fast.
+- **Mid scenes (~500 shapes)** — ogre 1.12 is ~28 % slower; the regression bites here.
+- **Stress scenes (~3000 shapes)** — both pinned at the same GPU saturation floor;
+  the regression hides under saturation.
+
+This pattern strongly suggests the OGRE 1.9 → 1.12 cost lives in something that
+scales **per-renderable per-frame** — likely per-draw-call overhead, the RTSS
+shader path, or material/state setup.  It's hidden when you have very few
+objects (low total work) or very many (every version queues draws faster than
+the GPU can complete them).
+
+### Headline numbers — small scene (~100 shapes, [`results/2026-05-04-1700/report.md`](results/2026-05-04-1700/report.md))
 
 | Metric | main_ogre19 | ogre112 | Δ |
 |---|---|---|---|
@@ -53,10 +83,52 @@ full table.  Headline numbers:
 | VRAM peak (MB) | 4395 | 3945 | **−10.2%** * |
 | GPU power (W) | 16.8 | 16.7 | ≈0% |
 
+### Headline numbers — mid scene (~500 shapes, [`results/2026-05-04-1559/report.md`](results/2026-05-04-1559/report.md))
+
+| Metric | main_ogre19 | ogre112 | Δ |
+|---|---|---|---|
+| RTF p50 | 0.1020 | 0.0730 | **−28.4%** * |
+| RTF p10 (tail) | 0.0846 | 0.0609 | **−28.0%** * |
+| Camera Hz | 3.04 | 2.26 | **−25.7%** * |
+| CPU % | 107 | 107 | ≈0% |
+| GPU util % | 20.5 | 27.0 | +31.7% * |
+| VRAM peak (MB) | 4180 | 4121 | −1.4% |
+| GPU power (W) | 29.6 | 32.0 | +8.0% * |
+
+### Headline numbers — stress scene (~3000 shapes, [`results/2026-05-04-1521/report.md`](results/2026-05-04-1521/report.md))
+
+| Metric | main_ogre19 | ogre112 | Δ |
+|---|---|---|---|
+| RTF p50 | 0.0115 | 0.0115 | +0.5% |
+| RTF p10 (tail) | 0.0103 | 0.0106 | +2.8% |
+| Camera Hz | 0.35 | 0.35 | +0.9% |
+| CPU % | 105 | 105 | ≈0% |
+| GPU util % | 15.0 | 16.5 | +10.0% |
+| VRAM peak (MB) | 2366 | 3032 | +28.1% * |
+| GPU power (W) | 30.7 | 30.2 | −1.5% |
+
 `*` = IQRs do not overlap (informally significant).
 
-**Conclusion**: OGRE 1.12 matches OGRE 1.9 on throughput (RTF, camera Hz, CPU)
-and reduces VRAM consumption by ~10%.  No regressions were observed.
+### Other observations
+
+- **VRAM**: ogre 1.12 uses 10 % less at 100 shapes (3945 vs 4395 MB) and is
+  roughly even at 500 shapes (−1.4 %).  At 3000 shapes ogre 1.12 actually
+  consumes **more** (+28 %) — the resource allocator behaviour flips at
+  scale.
+- **GPU util ~39 %** on both versions in the small-scene run → plenty of
+  headroom; the bottleneck has moved to CPU-side draw setup, which both
+  versions handle equally fast at this scale.
+- **CPU ~107–116 % on both** → one core busy.  Not a CPU-throughput problem;
+  it's per-frame latency.
+
+**Conclusion**: OGRE 1.12 is **not** a drop-in performance match for OGRE 1.9.
+At small (~100 shapes) and very large (~3000 shapes) scales the two versions
+are within noise, but at mid scales (~500 shapes) ogre 1.12 is ~28 % slower on
+both RTF and camera publish rate.  The regression is consistent with extra
+per-renderable-per-frame work in the OGRE 1.12 render path.
+
+The benchmark harness is reusable for any other scene — pass `--world <name>`
+and put a matching SDF in `bench/worlds/`.
 
 ## Repository layout
 
@@ -71,7 +143,9 @@ bench/
 │   ├── collect_samples.sh# single 90 s sample (warmup + measure + samplers)
 │   └── aggregate.py      # summarise per-run CSVs → summary.csv + report.md
 ├── worlds/
-│   └── 3k_shapes_camera.sdf   # pre-generated world (3000 shapes + camera)
+│   ├── 33_shapes_camera.sdf   # ~100 shapes  (small)
+│   ├── 166_shapes_camera.sdf  # ~500 shapes  (mid)
+│   └── 3k_shapes_camera.sdf   # ~3000 shapes (stress)
 └── results/
     └── YYYY-MM-DD-HHMM/
         ├── <condition>/run_NN/{rtf,cpu,gpu,io,cam_hz}.csv
