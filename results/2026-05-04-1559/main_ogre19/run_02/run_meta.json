@@ -1,0 +1,12 @@
+{
+  "install_dir": "/home/jrivero/code/my-agents.md/projects/ogre-migrator/ws/build-1.9/install",
+  "world_path": "/home/jrivero/code/my-agents.md/projects/ogre-migrator/bench/worlds/166_shapes_camera.sdf",
+  "linked_ogre": "libOgreMain.so.1.9.0",
+  "warmup_s": 10,
+  "measure_s": 80,
+  "t_start": 1777903377,
+  "t_ready": 1777903381,
+  "t_measure_start": 1777903391,
+  "t_end": 1777903551,
+  "gzsim_died_at": ""
+}
